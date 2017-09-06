@@ -98,10 +98,10 @@ fi
 
 # Configure Security Group Rules
 if ! openstack security group rule list $SECGROUP | grep -q icmp; then
-    openstack security group create $SECGROUP icmp -1 -1 0.0.0.0/0
+    openstack security group rule create $SECGROUP --proto icmp 
 fi
 if ! openstack security group rule list $SECGROUP | grep -q " tcp .* 22 "; then
-    openstack security group rule create $SECGROUP tcp 22 22 0.0.0.0/0
+    openstack security group rule create $SECGROUP --proto tcp --dst-port 22 
 fi
 
 # List secgroup rules
@@ -123,14 +123,14 @@ fi
 
 # Clean-up from previous runs
 openstack server delete $VM_NAME || true
-if ! timeout $ACTIVE_TIMEOUT sh -c "while nova show $VM_NAME; do sleep 1; done"; then
+if ! timeout $ACTIVE_TIMEOUT sh -c "while openstack server show $VM_NAME; do sleep 1; done"; then
     die $LINENO "server didn't terminate!"
 fi
 
 # Boot instance
 # -------------
 
-VM_UUID=$(openstack server create $VM_NAME --flavor $INSTANCE_TYPE --image $IMAGE --security-groups=$SECGROUP | grep ' id ' | get_field 2)
+VM_UUID=$(openstack server create $VM_NAME --flavor $INSTANCE_TYPE --image $IMAGE --security-group=$SECGROUP | grep ' id ' | get_field 2)
 die_if_not_set $LINENO VM_UUID "Failure launching $VM_NAME"
 
 # Check that the status is active within ACTIVE_TIMEOUT seconds
