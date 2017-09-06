@@ -66,7 +66,7 @@ is_service_enabled n-cell && exit 55
 # ==================
 
 # List servers for tenant:
-nova list
+openstack server list
 
 # Images
 # ------
@@ -82,44 +82,44 @@ die_if_not_set $LINENO IMAGE "Failure getting image $DEFAULT_IMAGE_NAME"
 # ---------------
 
 # List security groups
-nova secgroup-list
+openstack security group list
 
 # Create a secgroup
-if ! nova secgroup-list | grep -q $SECGROUP; then
-    nova secgroup-create $SECGROUP "$SECGROUP description"
-    if ! timeout $ASSOCIATE_TIMEOUT sh -c "while ! nova secgroup-list | grep -q $SECGROUP; do sleep 1; done"; then
+if ! openstack security group list | grep -q $SECGROUP; then
+    openstack security group create $SECGROUP "$SECGROUP description"
+    if ! timeout $ASSOCIATE_TIMEOUT sh -c "while ! openstack  security group list | grep -q $SECGROUP; do sleep 1; done"; then
         die $LINENO "Security group not created"
     fi
 fi
 
 # Configure Security Group Rules
-if ! nova secgroup-list-rules $SECGROUP | grep -q icmp; then
-    nova secgroup-add-rule $SECGROUP icmp -1 -1 0.0.0.0/0
+if ! openstack security group list $SECGROUP | grep -q icmp; then
+    openstack security group rule create --proto icmp $SECGROUP
 fi
-if ! nova secgroup-list-rules $SECGROUP | grep -q " tcp .* 22 "; then
-    nova secgroup-add-rule $SECGROUP tcp 22 22 0.0.0.0/0
+if ! openstack security group rule list $SECGROUP | grep -q " tcp .* 22 "; then
+    openstack security group rule create --proto tcp --dst-port 22 $SECGROUP
 fi
 
 # List secgroup rules
-nova secgroup-list-rules $SECGROUP
+openstack security group rule list $SECGROUP
 
 # Set up instance
 # ---------------
 
 # List flavors
-nova flavor-list
+openstack flavor list
 
 # Select a flavor
-INSTANCE_TYPE=$(nova flavor-list | grep $DEFAULT_INSTANCE_TYPE | get_field 1)
+INSTANCE_TYPE=$(openstack flavor list | grep $DEFAULT_INSTANCE_TYPE | get_field 1)
 if [[ -z "$INSTANCE_TYPE" ]]; then
     # grab the first flavor in the list to launch if default doesn't exist
-    INSTANCE_TYPE=$(nova flavor-list | head -n 4 | tail -n 1 | get_field 1)
+    INSTANCE_TYPE=$(openstack flavor list | head -n 4 | tail -n 1 | get_field 1)
     die_if_not_set $LINENO INSTANCE_TYPE "Failure retrieving INSTANCE_TYPE"
 fi
 
 # Clean-up from previous runs
-nova delete $VM_NAME || true
-if ! timeout $ACTIVE_TIMEOUT sh -c "while nova show $VM_NAME; do sleep 1; done"; then
+openstack server delete $VM_NAME || true
+if ! timeout $ACTIVE_TIMEOUT sh -c "while openstack server show $VM_NAME; do sleep 1; done"; then
     die $LINENO "server didn't terminate!"
     exit 1
 fi
@@ -127,11 +127,11 @@ fi
 # Boot instance
 # -------------
 
-VM_UUID=$(nova boot --flavor $INSTANCE_TYPE --image $IMAGE --security-groups=$SECGROUP $VM_NAME | grep ' id ' | get_field 2)
+VM_UUID=$(openstack server create $VM_NAME --flavor $INSTANCE_TYPE --image $IMAGE --security-group=$SECGROUP | grep ' id ' | get_field 2)
 die_if_not_set $LINENO VM_UUID "Failure launching $VM_NAME"
 
 # Check that the status is active within ACTIVE_TIMEOUT seconds
-if ! timeout $ACTIVE_TIMEOUT sh -c "while ! nova show $VM_UUID | grep status | grep -q ACTIVE; do sleep 1; done"; then
+if ! timeout $ACTIVE_TIMEOUT sh -c "while ! openstack server show $VM_UUID | grep status | grep -q ACTIVE; do sleep 1; done"; then
     die $LINENO "server didn't become active!"
 fi
 
@@ -146,16 +146,16 @@ ping_check $IP $BOOT_TIMEOUT "$PRIVATE_NETWORK_NAME"
 # ------------
 
 # Allocate a floating IP from the default pool
-FLOATING_IP=$(nova floating-ip-create | grep $DEFAULT_FLOATING_POOL | get_field 1)
+FLOATING_IP=$(openstack floating ip create $DEFAULT_FLOATING_POOL | grep $DEFAULT_FLOATING_POOL | get_field 1)
 die_if_not_set $LINENO FLOATING_IP "Failure creating floating IP from pool $DEFAULT_FLOATING_POOL"
 
 # List floating addresses
-if ! timeout $ASSOCIATE_TIMEOUT sh -c "while ! nova floating-ip-list | grep -q $FLOATING_IP; do sleep 1; done"; then
+if ! timeout $ASSOCIATE_TIMEOUT sh -c "while ! openstack floating ip list | grep -q $FLOATING_IP; do sleep 1; done"; then
     die $LINENO "Floating IP not allocated"
 fi
 
 # Add floating IP to our server
-nova add-floating-ip $VM_UUID $FLOATING_IP || \
+openstack add floating ip $VM_UUID $FLOATING_IP || \
     die $LINENO "Failure adding floating IP $FLOATING_IP to $VM_NAME"
 
 # Test we can ping our floating IP within ASSOCIATE_TIMEOUT seconds
@@ -163,20 +163,20 @@ ping_check $FLOATING_IP $ASSOCIATE_TIMEOUT "$PUBLIC_NETWORK_NAME"
 
 if ! is_service_enabled neutron; then
     # Allocate an IP from second floating pool
-    TEST_FLOATING_IP=$(nova floating-ip-create $TEST_FLOATING_POOL | grep $TEST_FLOATING_POOL | get_field 1)
+    TEST_FLOATING_IP=$(openstack floating ip create $TEST_FLOATING_POOL | grep $TEST_FLOATING_POOL | get_field 1)
     die_if_not_set $LINENO TEST_FLOATING_IP "Failure creating floating IP in $TEST_FLOATING_POOL"
 
     # list floating addresses
-    if ! timeout $ASSOCIATE_TIMEOUT sh -c "while ! nova floating-ip-list | grep $TEST_FLOATING_POOL | grep -q $TEST_FLOATING_IP; do sleep 1; done"; then
+    if ! timeout $ASSOCIATE_TIMEOUT sh -c "while ! openstack floating ip list | grep $TEST_FLOATING_POOL | grep -q $TEST_FLOATING_IP; do sleep 1; done"; then
         die $LINENO "Floating IP not allocated"
     fi
 fi
 
 # Dis-allow icmp traffic (ping)
-nova secgroup-delete-rule $SECGROUP icmp -1 -1 0.0.0.0/0 || \
+openstack security group rule delete $(openstack security group rule list $SECGROUP | grep icmp | awk {'print $2} || \
     die $LINENO "Failure deleting security group rule from $SECGROUP"
 
-if ! timeout $ASSOCIATE_TIMEOUT sh -c "while nova secgroup-list-rules $SECGROUP | grep -q icmp; do sleep 1; done"; then
+if ! timeout $ASSOCIATE_TIMEOUT sh -c "while openstack security group rule list $SECGROUP | grep -q icmp; do sleep 1; done"; then
     die $LINENO "Security group rule not deleted from $SECGROUP"
 fi
 
@@ -191,23 +191,23 @@ fi
 
 if ! is_service_enabled neutron; then
     # Delete second floating IP
-    nova floating-ip-delete $TEST_FLOATING_IP || \
+    openstack floating ip delete $TEST_FLOATING_IP || \
         die $LINENO "Failure deleting floating IP $TEST_FLOATING_IP"
 fi
 
 # Delete the floating ip
-nova floating-ip-delete $FLOATING_IP || \
+openstack floating ip delete $FLOATING_IP || \
     die $LINENO "Failure deleting floating IP $FLOATING_IP"
 
 # Delete instance
-nova delete $VM_UUID || die $LINENO "Failure deleting instance $VM_NAME"
+openstack server delete $VM_UUID || die $LINENO "Failure deleting instance $VM_NAME"
 # Wait for termination
-if ! timeout $TERMINATE_TIMEOUT sh -c "while nova list | grep -q $VM_UUID; do sleep 1; done"; then
+if ! timeout $TERMINATE_TIMEOUT sh -c "while openstack server list | grep -q $VM_UUID; do sleep 1; done"; then
     die $LINENO "Server $VM_NAME not deleted"
 fi
 
 # Delete secgroup
-nova secgroup-delete $SECGROUP || \
+openstack security group delete $SECGROUP || \
     die $LINENO "Failure deleting security group $SECGROUP"
 
 set +o xtrace

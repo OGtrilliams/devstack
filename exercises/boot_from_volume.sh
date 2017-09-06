@@ -66,7 +66,7 @@ VOL_NAME=${VOL_NAME:-ex-vol-bfv}
 # ==================
 
 # List servers for project:
-nova list
+openstack server list
 
 # Images
 # ------
@@ -82,7 +82,7 @@ die_if_not_set $LINENO IMAGE "Failure getting image $DEFAULT_IMAGE_NAME"
 # ---------------
 
 # List security groups
-nova secgroup-list
+openstack security group list
 
 if is_service_enabled n-cell; then
     # Cells does not support security groups, so force the use of "default"
@@ -90,9 +90,9 @@ if is_service_enabled n-cell; then
     echo "Using the default security group because of Cells."
 else
     # Create a secgroup
-    if ! nova secgroup-list | grep -q $SECGROUP; then
-        nova secgroup-create $SECGROUP "$SECGROUP description"
-        if ! timeout $ASSOCIATE_TIMEOUT sh -c "while ! nova secgroup-list | grep -q $SECGROUP; do sleep 1; done"; then
+    if ! openstack security group list | grep -q $SECGROUP; then
+        openstack security group create $SECGROUP "$SECGROUP description"
+        if ! timeout $ASSOCIATE_TIMEOUT sh -c "while ! openstack security group list | grep -q $SECGROUP; do sleep 1; done"; then
             echo "Security group not created"
             exit 1
         fi
@@ -100,32 +100,32 @@ else
 fi
 
 # Configure Security Group Rules
-if ! nova secgroup-list-rules $SECGROUP | grep -q icmp; then
-    nova secgroup-add-rule $SECGROUP icmp -1 -1 0.0.0.0/0
+if ! openstack security group rule list $SECGROUP | grep -q icmp; then
+    openstack security group rule create --proto icmp $SECGROUP
 fi
-if ! nova secgroup-list-rules $SECGROUP | grep -q " tcp .* 22 "; then
-    nova secgroup-add-rule $SECGROUP tcp 22 22 0.0.0.0/0
+if ! openstack security group rule list $SECGROUP | grep -q " tcp .* 22 "; then
+    openstack security group rule create --proto tcp --dst-port 22 $SECGROUP
 fi
 
 # List secgroup rules
-nova secgroup-list-rules $SECGROUP
+openstack security group rule list $SECGROUP
 
 # Set up instance
 # ---------------
 
 # List flavors
-nova flavor-list
+openstack flavor list
 
 # Select a flavor
-INSTANCE_TYPE=$(nova flavor-list | grep $DEFAULT_INSTANCE_TYPE | get_field 1)
+INSTANCE_TYPE=$(openstack flavor list | grep $DEFAULT_INSTANCE_TYPE | get_field 1)
 if [[ -z "$INSTANCE_TYPE" ]]; then
     # grab the first flavor in the list to launch if default doesn't exist
-    INSTANCE_TYPE=$(nova flavor-list | head -n 4 | tail -n 1 | get_field 1)
+    INSTANCE_TYPE=$(openstack flavor list | head -n 4 | tail -n 1 | get_field 1)
 fi
 
 # Clean-up from previous runs
-nova delete $VM_NAME || true
-if ! timeout $ACTIVE_TIMEOUT sh -c "while nova show $VM_NAME; do sleep 1; done"; then
+openstack server delete $VM_NAME || true
+if ! timeout $ACTIVE_TIMEOUT sh -c "while openstack show $VM_NAME; do sleep 1; done"; then
     echo "server didn't terminate!"
     exit 1
 fi
@@ -133,25 +133,25 @@ fi
 # Setup Keypair
 KEY_NAME=test_key
 KEY_FILE=key.pem
-nova keypair-delete $KEY_NAME || true
-nova keypair-add $KEY_NAME > $KEY_FILE
+openstack keypair delete $KEY_NAME || true
+openstack keypair create $KEY_NAME > $KEY_FILE
 chmod 600 $KEY_FILE
 
 # Set up volume
 # -------------
 
 # Delete any old volume
-cinder delete $VOL_NAME || true
-if ! timeout $ACTIVE_TIMEOUT sh -c "while cinder list | grep $VOL_NAME; do sleep 1; done"; then
+openstack volume delete $VOL_NAME || true
+if ! timeout $ACTIVE_TIMEOUT sh -c "while openstack volume list | grep $VOL_NAME; do sleep 1; done"; then
     echo "Volume $VOL_NAME not deleted"
     exit 1
 fi
 
 # Create the bootable volume
 start_time=$(date +%s)
-cinder create --image-id $IMAGE --display-name=$VOL_NAME --display-description "test bootable volume: $VOL_NAME" $DEFAULT_VOLUME_SIZE || \
+openstack volume create $VOL_NAME --image $IMAGE --description "test bootable volume: $VOL_NAME" $DEFAULT_VOLUME_SIZE || \
     die $LINENO "Failure creating volume $VOL_NAME"
-if ! timeout $ACTIVE_TIMEOUT sh -c "while ! cinder list | grep $VOL_NAME | grep available; do sleep 1; done"; then
+if ! timeout $ACTIVE_TIMEOUT sh -c "while ! openstack volume list | grep $VOL_NAME | grep available; do sleep 1; done"; then
     echo "Volume $VOL_NAME not created"
     exit 1
 fi
@@ -159,7 +159,7 @@ end_time=$(date +%s)
 echo "Completed cinder create in $((end_time - start_time)) seconds"
 
 # Get volume ID
-VOL_ID=$(cinder list | grep $VOL_NAME  | get_field 1)
+VOL_ID=$(openstack volume list | grep $VOL_NAME  | get_field 1)
 die_if_not_set $LINENO VOL_ID "Failure retrieving volume ID for $VOL_NAME"
 
 # Boot instance
@@ -168,11 +168,11 @@ die_if_not_set $LINENO VOL_ID "Failure retrieving volume ID for $VOL_NAME"
 # Boot using the --block-device-mapping param. The format of mapping is:
 # <dev_name>=<id>:<type>:<size(GB)>:<delete_on_terminate>
 # Leaving the middle two fields blank appears to do-the-right-thing
-VM_UUID=$(nova boot --flavor $INSTANCE_TYPE --image $IMAGE --block-device-mapping vda=$VOL_ID --security-groups=$SECGROUP --key-name $KEY_NAME $VM_NAME | grep ' id ' | get_field 2)
+VM_UUID=$(openstack server create $VM_NAME --flavor $INSTANCE_TYPE --image $IMAGE --block-device-mapping vda=$VOL_ID --security-group=$SECGROUP --key-name $KEY_NAME | grep ' id ' | get_field 2)
 die_if_not_set $LINENO VM_UUID "Failure launching $VM_NAME"
 
 # Check that the status is active within ACTIVE_TIMEOUT seconds
-if ! timeout $ACTIVE_TIMEOUT sh -c "while ! nova show $VM_UUID | grep status | grep -q ACTIVE; do sleep 1; done"; then
+if ! timeout $ACTIVE_TIMEOUT sh -c "while ! openstack server show $VM_UUID | grep status | grep -q ACTIVE; do sleep 1; done"; then
     echo "server didn't become active!"
     exit 1
 fi
@@ -189,22 +189,22 @@ ping_check $IP $BOOT_TIMEOUT "$PRIVATE_NETWORK_NAME"
 # --------
 
 # Delete volume backed instance
-nova delete $VM_UUID || die $LINENO "Failure deleting instance $VM_NAME"
-if ! timeout $TERMINATE_TIMEOUT sh -c "while nova list | grep -q $VM_UUID; do sleep 1; done"; then
+openstack delete $VM_UUID || die $LINENO "Failure deleting instance $VM_NAME"
+if ! timeout $TERMINATE_TIMEOUT sh -c "while openstack server list | grep -q $VM_UUID; do sleep 1; done"; then
     echo "Server $VM_NAME not deleted"
     exit 1
 fi
 
 # Wait for volume to be released
-if ! timeout $ACTIVE_TIMEOUT sh -c "while ! cinder list | grep $VOL_NAME | grep available; do sleep 1; done"; then
+if ! timeout $ACTIVE_TIMEOUT sh -c "while ! openstack volume list | grep $VOL_NAME | grep available; do sleep 1; done"; then
     echo "Volume $VOL_NAME not released"
     exit 1
 fi
 
 # Delete volume
 start_time=$(date +%s)
-cinder delete $VOL_ID || die $LINENO "Failure deleting volume $VOLUME_NAME"
-if ! timeout $ACTIVE_TIMEOUT sh -c "while cinder list | grep $VOL_NAME; do sleep 1; done"; then
+openstack volume delete $VOL_ID || die $LINENO "Failure deleting volume $VOLUME_NAME"
+if ! timeout $ACTIVE_TIMEOUT sh -c "while openstack volume list | grep $VOL_NAME; do sleep 1; done"; then
     echo "Volume $VOL_NAME not deleted"
     exit 1
 fi
@@ -215,7 +215,7 @@ if [[ $SECGROUP = "default" ]] ; then
     echo "Skipping deleting default security group"
 else
     # Delete secgroup
-    nova secgroup-delete $SECGROUP || die $LINENO "Failure deleting security group $SECGROUP"
+    openstack security group delete $SECGROUP || die $LINENO "Failure deleting security group $SECGROUP"
 fi
 
 set +o xtrace

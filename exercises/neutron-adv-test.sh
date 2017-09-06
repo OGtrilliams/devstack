@@ -163,14 +163,14 @@ function get_network_id {
 function get_flavor_id {
     local INSTANCE_TYPE=$1
     local FLAVOR_ID
-    FLAVOR_ID=`nova flavor-list | grep $INSTANCE_TYPE | awk '{print $2}'`
+    FLAVOR_ID=`openstack flavor list | grep $INSTANCE_TYPE | awk '{print $2}'`
     die_if_not_set $LINENO FLAVOR_ID "Failure retrieving FLAVOR_ID for $INSTANCE_TYPE"
     echo "$FLAVOR_ID"
 }
 
 function confirm_server_active {
     local VM_UUID=$1
-    if ! timeout $ACTIVE_TIMEOUT sh -c "while ! nova show $VM_UUID | grep status | grep -q ACTIVE; do sleep 1; done"; then
+    if ! timeout $ACTIVE_TIMEOUT sh -c "while ! openstack server show $VM_UUID | grep status | grep -q ACTIVE; do sleep 1; done"; then
         echo "server '$VM_UUID' did not become active!"
         false
     fi
@@ -236,7 +236,7 @@ function create_network {
     local NET_ID
     NET_ID=$(openstack network create --project $PROJECT_ID $NET_NAME $EXTRA| grep ' id ' | awk '{print $4}' )
     die_if_not_set $LINENO NET_ID "Failure creating NET_ID for $PROJECT_ID $NET_NAME $EXTRA"
-    openstack subnet create --ip-version 4 --project $PROJECT_ID --gateway $GATEWAY --subnet-pool None --network $NET_ID --subnet-range $CIDR "${NET_NAME}_subnet"
+    openstack subnet create --ip-version 4 --project $PROJECT_ID --gateway $GATEWAY --network $NET_ID --subnet-range $CIDR "${NET_NAME}_subnet"
     neutron_debug_admin probe-create --device-owner compute $NET_ID
     source $TOP_DIR/openrc demo demo
 }
@@ -263,7 +263,7 @@ function create_vm {
     #TODO (nati) Add multi-nic test
     #TODO (nati) Add public-net test
     local VM_UUID
-    VM_UUID=`nova boot --flavor $(get_flavor_id m1.tiny) \
+    VM_UUID=`openstack server create --flavor $(get_flavor_id m1.tiny) \
         --image $(get_image_id) \
         $NIC \
         $PROJECT-server$NUM | grep ' id ' | cut -d"|" -f3 | sed 's/ //g'`
@@ -306,12 +306,12 @@ function shutdown_vm {
     local NUM=$2
     source $TOP_DIR/openrc $PROJECT $PROJECT
     VM_NAME=${PROJECT}-server$NUM
-    nova delete $VM_NAME
+    openstack server delete $VM_NAME
 }
 
 function shutdown_vms {
     foreach_project_vm 'shutdown_vm ${%PROJECT%_NAME} %NUM%'
-    if ! timeout $TERMINATE_TIMEOUT sh -c "while nova list | grep -q ACTIVE; do sleep 1; done"; then
+    if ! timeout $TERMINATE_TIMEOUT sh -c "while openstack server list | grep -q ACTIVE; do sleep 1; done"; then
         die $LINENO "Some VMs failed to shutdown"
     fi
 }
