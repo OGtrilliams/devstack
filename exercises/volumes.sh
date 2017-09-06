@@ -88,7 +88,7 @@ if is_service_enabled n-cell; then
 else
     # Create a secgroup
     if ! openstack security group list | grep -q $SECGROUP; then
-        openstack security group create $SECGROUP "$SECGROUP description"
+        openstack security group create $SECGROUP --description "$SECGROUP description"
         if ! timeout $ASSOCIATE_TIMEOUT sh -c "while ! openstack security group list | grep -q $SECGROUP; do sleep 1; done"; then
             echo "Security group not created"
             exit 1
